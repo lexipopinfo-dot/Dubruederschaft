@@ -24,14 +24,20 @@ def decode_all(root: Path) -> list[str]:
     decoded = []
     art_dir = root / "resources" / "art"
     if art_dir.is_dir():
+        # A base64 string may be split across several manifests (the
+        # GitHub CLI caps one argument at 128KB), so chunks for the same
+        # output file are joined in manifest filename order.
+        buffers: dict[str, list[str]] = {}
         for src in sorted(art_dir.glob("*.json")):
             manifest = json.loads(src.read_text())
-            for name, b64 in manifest.items():
-                dst = art_dir / name
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                data = base64.b64decode(b64, validate=True)
-                dst.write_bytes(data)
-                decoded.append(f"{dst.relative_to(root)} ({len(data)} bytes)")
+            for name, chunk in manifest.items():
+                buffers.setdefault(name, []).append(chunk)
+        for name, chunks in sorted(buffers.items()):
+            data = base64.b64decode("".join(chunks), validate=True)
+            dst = art_dir / name
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(data)
+            decoded.append(f"{dst.relative_to(root)} ({len(data)} bytes)")
     fonts_dir = root / "resources" / "fonts"
     if fonts_dir.is_dir():
         for src in sorted(fonts_dir.glob("*.b64")):
