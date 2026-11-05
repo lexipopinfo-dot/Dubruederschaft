@@ -28,6 +28,10 @@ enum EParams
   kParamReverbMix,       // %, 0-100, default 25 (Mix Dry/Wet)
   kParamReverbDamp,      // %, 0-100, default 50
   kParamMaster,          // %, 0-100, default 70
+  kParamPanic,           // bool, default off — total mute (v0.2.0, Lexi's
+                         // "kill the regime" button): while on, ALL sound
+                         // dies, in case the output suddenly peaks.
+                         // NOT stored in presets (like Master).
   kNumParams
 };
 
@@ -48,7 +52,7 @@ public:
   void OnReset() override;
 
 #if IPLUG_EDITOR
-  // Fixed panel size: 1200x750, no host resize.
+  // Fixed panel size: 780x488 (was 1200x750, scaled to 65% 2026-11-05), no host resize.
   bool OnHostRequestingSupportedViewConfiguration(int width, int height) override
   {
     return width == PLUG_WIDTH && height == PLUG_HEIGHT;
@@ -57,12 +61,17 @@ public:
 
 #if IPLUG_DSP // http://bit.ly/2S64BDd
   void ProcessBlock(sample** inputs, sample** outputs, int nFrames) override;
+  // MIDI input (v0.2.0: plugin is now a VSTi / instrument). Note On
+  // triggers the siren and sets its pitch from the note; Note Off
+  // stops it (unless Hold is latched). Mono: last note wins.
+  void ProcessMidiMsg(const IMidiMsg& msg) override;
 #endif
 
   // UI-driven state, not automatable params: momentary Trigger + Hold latch.
   void SetTrigger(bool on) { mTrigger.store(on); }
   void SetHold(bool latched) { mHold.store(latched); }
   bool GetHold() const { return mHold.load(); }
+  int GetMidiNote() const { return mMidiNote.load(); }
 
   // 16 preset slots (8x2). In-memory only in this build. Master is NOT
   // stored in presets (SPEC.md §10, proposal), so loading a preset cannot
@@ -82,6 +91,11 @@ private:
   std::atomic<bool> mTrigger{false};
   std::atomic<bool> mHold{false};
   std::atomic<float> mMeterLevel{0.f};
+
+  // MIDI state (audio thread writes, UI reads): -1 = no note held.
+  std::atomic<int> mMidiNote{-1};
+  std::atomic<float> mMidiPitchHz{0.f};
+  std::atomic<bool> mMidiActive{false};
 
   struct PresetSlot
   {
