@@ -41,8 +41,8 @@ static constexpr double kPi = 3.14159265358979323846;
 // Knob: navy crayon face + Lexi's yellow ring (static, with the white
 // wobbly outline baked in) + a code-drawn rotating indicator dot.
 // The ring must NOT rotate (its -/+ would spin with it), so only the dot
-// moves. Drag behaviour comes from IKnobControl.
-class CrayonKnobControl : public IKnobControl
+// moves. Drag behaviour comes from IKnobControlBase.
+class CrayonKnobControl : public IKnobControlBase
 {
 public:
   // ringBox: the ring's own box (57px, or 76px for Glide). The control
@@ -50,10 +50,10 @@ public:
   CrayonKnobControl(const IRECT& ringBox, int paramIdx, double min, double max,
                     const IBitmap& face, const IBitmap& ring,
                     const char* label, const char* subLabel = nullptr)
-    : IKnobControl(IRECT(ringBox.L - 3.f, ringBox.T - 3.f,
+    : IKnobControlBase(IRECT(ringBox.L - 3.f, ringBox.T - 3.f,
                          ringBox.R + 3.f,
                          ringBox.B + 3.f + 22.f + (subLabel ? 16.f : 0.f)),
-                   paramIdx, label)
+                   paramIdx)
     , mMin(min)
     , mMax(max)
     , mFace(face)
@@ -255,13 +255,13 @@ private:
 };
 
 // Master fader: Lexi's vertical pill track + yellow handle bitmaps.
-// Drag behaviour comes from ISliderControl; only the drawing is custom.
-class MasterFaderControl : public ISliderControl
+// Drag behaviour comes from ISliderControlBase; only the drawing is custom.
+class MasterFaderControl : public ISliderControlBase
 {
 public:
   MasterFaderControl(const IRECT& bounds, int paramIdx,
                      const IBitmap& track, const IBitmap& handle)
-    : ISliderControl(bounds, paramIdx, "", DEFAULT_STYLE, false, EDirection::Vertical)
+    : ISliderControlBase(bounds, paramIdx, EDirection::Vertical)
     , mTrack(track)
     , mHandle(handle)
   {
