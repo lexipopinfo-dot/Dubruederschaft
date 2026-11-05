@@ -1,0 +1,93 @@
+# Dubrüderschaft — macOS VST3 smoke-test build (Phase 2, 2026-11-05).
+#
+# Goal: produce ONE file, Dubruederschaft.vst3 (Intel x86_64, Monterey
+# compatible), as a workflow artifact. Lexi copies it to
+# ~/Library/Audio/Plug-Ins/VST3/ on her MacBook Pro 2016. No installer.
+#
+# Why this shape:
+# - CMake (not the Xcode makedist script): the template's build-mac.yml
+#   needs a VST2_SDK secret and installer docs; this workflow needs neither.
+# - Runs on macos-15 (ARM64): GitHub has NO native Intel runner left
+#   (macos-13 removed), so the x86_64 binary is CROSS-COMPILED from ARM
+#   via the macos-xcode-x86_64 CMake preset (CMAKE_OSX_ARCHITECTURES=x86_64,
+#   CMAKE_OSX_DEPLOYMENT_TARGET=10.13). This is UNPROVEN for iPlug2 — the
+#   first run is a test of the pipeline, not a release. If it fails, the
+#   exact error is the deliverable, not a claim of success.
+# - Ad-hoc signing only (codesign -s -). No paid Apple Developer account,
+#   no notarisation — this is for personal, local use only.
+# - VST3 only (FORMATS VST3 in Dubruederschaft/CMakeLists.txt).
+# - The built bundle is NOT run on the ARM runner (it is x86_64); only
+#   Lexi's Intel Mac can prove it loads in Ableton 12.
+name: Build macOS VST3 (smoke test)
+
+on:
+  push:
+    paths:
+      - 'Dubruederschaft/**'
+      - 'CMakeLists.txt'
+      - 'CMakePresets.json'
+      - '.github/workflows/build-macos-vst3.yml'
+  workflow_dispatch:
+
+env:
+  PROJECT_NAME: Dubruederschaft
+
+jobs:
+  build-macos-vst3:
+    name: Build VST3 x86_64 (cross-compile on ARM)
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache iPlug SDKs
+        id: cache-sdks
+        uses: actions/cache@v4
+        with:
+          path: |
+            iPlug2/Dependencies/IPlug/VST3_SDK
+            iPlug2/Dependencies/IPlug/CLAP_SDK
+            iPlug2/Dependencies/IPlug/CLAP_HELPERS
+          key: iplug-sdks-${{ hashFiles('iPlug2/Dependencies/IPlug/download-iplug-sdks.sh') }}
+
+      - name: Get iPlug SDKs
+        if: steps.cache-sdks.outputs.cache-hit != 'true'
+        run: |
+          cd iPlug2/Dependencies/IPlug
+          ./download-iplug-sdks.sh
+
+      - name: CMake configure (macos-xcode-x86_64 preset)
+        run: cmake --preset=macos-xcode-x86_64
+
+      - name: Build (Release)
+        run: cmake --build --preset=macos-xcode-x86_64
+
+      - name: Verify VST3 bundle exists and is x86_64
+        run: |
+          VST3="build/macos-xcode-x86_64/out/Release/${{ env.PROJECT_NAME }}.vst3"
+          test -d "$VST3" || { echo "MISSING: $VST3"; ls -R build/macos-xcode-x86_64/out || true; exit 1; }
+          BIN="$VST3/Contents/MacOS/${{ env.PROJECT_NAME }}"
+          test -f "$BIN" || { echo "MISSING binary: $BIN"; exit 1; }
+          echo "Architectures in binary:"
+          lipo -archs "$BIN"
+          lipo -archs "$BIN" | grep -q x86_64 || { echo "ERROR: binary is not x86_64"; exit 1; }
+          echo "VST3 bundle verified as x86_64"
+
+      - name: Ad-hoc code-sign the bundle
+        run: |
+          codesign --force -s - --deep "build/macos-xcode-x86_64/out/Release/${{ env.PROJECT_NAME }}.vst3"
+          codesign --verify --verbose "build/macos-xcode-x86_64/out/Release/${{ env.PROJECT_NAME }}.vst3" || echo "codesign --verify reported a problem (see log); artifact is still uploaded for inspection"
+
+      - name: Zip the VST3 bundle
+        run: |
+          cd build/macos-xcode-x86_64/out/Release
+          zip -r "${{ env.PROJECT_NAME }}-vst3-x86_64.zip" "${{ env.PROJECT_NAME }}.vst3"
+
+      - name: Upload VST3 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-vst3-x86_64
+          path: build/macos-xcode-x86_64/out/Release/${{ env.PROJECT_NAME }}-vst3-x86_64.zip
+          if-no-files-found: error
