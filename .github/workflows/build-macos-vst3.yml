@@ -42,6 +42,15 @@ jobs:
         with:
           submodules: recursive
 
+      # iPlug2 is listed in .gitmodules but the repo has no submodule
+      # gitlink for it, so actions/checkout with submodules: recursive
+      # does NOT create the iPlug2 folder. Clone it explicitly here,
+      # before the cache step (the cache key hashes a file inside it).
+      - name: Clone iPlug2 framework
+        run: |
+          if [ ! -f iPlug2/iPlug2.cmake ]; then rm -rf iPlug2; git clone --depth 1 https://github.com/iPlug2/iPlug2.git iPlug2; fi
+          ls iPlug2/Dependencies/IPlug/download-iplug-sdks.sh
+
       - name: Cache iPlug SDKs
         id: cache-sdks
         uses: actions/cache@v4
