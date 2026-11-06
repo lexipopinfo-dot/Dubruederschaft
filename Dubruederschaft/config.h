@@ -1,7 +1,7 @@
-#define PLUG_NAME "Dubrüderschaft"
+#define PLUG_NAME "Dubruederschaft"
 #define PLUG_MFR "Lexi"
-#define PLUG_VERSION_HEX 0x00020000
-#define PLUG_VERSION_STR "0.2.0"
+#define PLUG_VERSION_HEX 0x00030000
+#define PLUG_VERSION_STR "0.3.0"
 #define PLUG_UNIQUE_ID 'DbR1'
 #define PLUG_MFR_ID 'Lexi'
 #define PLUG_URL_STR "https://github.com/iPlug2/iPlug2/wiki"
@@ -27,15 +27,15 @@
 #define PLUG_DOES_MPE 0
 #define PLUG_DOES_STATE_CHUNKS 0
 #define PLUG_HAS_UI 1
-#define PLUG_WIDTH 780
-#define PLUG_HEIGHT 488
+#define PLUG_WIDTH 600
+#define PLUG_HEIGHT 375
 #define PLUG_FPS 60
 #define PLUG_SHARED_RESOURCES 0
 #define PLUG_HOST_RESIZE 0
-#define PLUG_MIN_WIDTH 780
-#define PLUG_MIN_HEIGHT 488
-#define PLUG_MAX_WIDTH 780
-#define PLUG_MAX_HEIGHT 488
+#define PLUG_MIN_WIDTH 600
+#define PLUG_MIN_HEIGHT 375
+#define PLUG_MAX_WIDTH 600
+#define PLUG_MAX_HEIGHT 375
 
 #define AUV2_ENTRY Dubruederschaft_Entry
 #define AUV2_ENTRY_STR "Dubruederschaft_Entry"
