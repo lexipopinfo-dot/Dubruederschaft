@@ -100,6 +100,12 @@ class DSP {
   // Echo: one feedback delay line, max 1000 ms.
   std::vector<float> echoBuf_;
   std::size_t echoWrite_ = 0;
+  // Slew-limited echo delay length (samples). Turning the Time knob
+  // used to jump the read pointer through old audio -> click, and the
+  // feedback recirculated it as a crackle (ear-test 2026-11-06). The
+  // length now glides toward its target (~30 ms), like a tape delay.
+  // -1 = not set yet (snap on the first block, while the buffer is silent).
+  double smoothedEchoDelay_ = -1.0;
 
   // Reverb: 4 parallel combs + 2 series allpasses (Freeverb-inspired).
   struct Comb {
