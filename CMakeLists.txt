@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(Dubruederschaft)
+project(Dubruderschaft)
 
 # iPlug2 framework location. Default to the in-tree submodule, but allow an
 # external canonical checkout via `-DIPLUG2_DIR=/path` or the IPLUG2_DIR
@@ -10,4 +10,4 @@ include(${IPLUG2_DIR}/iPlug2.cmake)
 
 find_package(iPlug2 REQUIRED)
 
-add_subdirectory(Dubruederschaft)
+add_subdirectory(Dubruderschaft)
