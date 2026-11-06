@@ -50,6 +50,7 @@ void DSP::reset() {
   envelope_ = 0.0;
   std::fill(echoBuf_.begin(), echoBuf_.end(), 0.0f);
   echoWrite_ = 0;
+  smoothedEchoDelay_ = -1.0;
   for (auto& c : combs_) {
     std::fill(c.buf.begin(), c.buf.end(), 0.0f);
     c.idx = 0;
@@ -122,8 +123,14 @@ void DSP::processBlock(float* out, int n) {
   const double glideCoeff = smoothCoeff(params_.glideMs / 1000.0, sr_);
   const double envAttack = smoothCoeff(0.005, sr_);  // 5 ms on
   const double envRelease = smoothCoeff(0.020, sr_); // 20 ms off
-  const double echoDelaySamples =
+  const double echoTargetDelay =
       clamp(params_.echoTimeMs, 0.0, 1000.0) / 1000.0 * sr_;
+  // Slew-limit the delay length (~30 ms): turning Time glides the read
+  // position instead of jumping it (see header). Snap on the first
+  // block, while the echo buffer is still silent.
+  const double echoDelayCoeff = smoothCoeff(0.030, sr_);
+  if (smoothedEchoDelay_ < 0.0)
+    smoothedEchoDelay_ = echoTargetDelay;
   const double echoFb = clamp(params_.echoFeedback, 0.0, 0.85);
   const double echoMix = clamp(params_.echoMix, 0.0, 1.0);
   const double revSize = clamp(params_.reverbSize, 0.0, 1.0);
@@ -156,9 +163,10 @@ void DSP::processBlock(float* out, int n) {
 
     // --- Echo (feedback delay) ---
     double echoOut = 0.0;
-    if (!echoBuf_.empty() && echoDelaySamples >= 1.0) {
+    smoothedEchoDelay_ += (echoTargetDelay - smoothedEchoDelay_) * echoDelayCoeff;
+    if (!echoBuf_.empty() && smoothedEchoDelay_ >= 1.0) {
       const std::size_t delay =
-          static_cast<std::size_t>(echoDelaySamples + 0.5);
+          static_cast<std::size_t>(smoothedEchoDelay_ + 0.5);
       const std::size_t read =
           (echoWrite_ + echoBuf_.size() - delay) % echoBuf_.size();
       echoOut = echoBuf_[read];
