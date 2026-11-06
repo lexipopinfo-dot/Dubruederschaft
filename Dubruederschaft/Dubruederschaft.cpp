@@ -1,14 +1,25 @@
-// Dubrüderschaft — iPlug2 plugin implementation (Phase 2, 2026-11-05).
+// Dubruederschaft — iPlug2 plugin implementation (v0.3.0, 2026-11-06).
 // Wires the framework-free DSP core (DubruederschaftDSP.*) to iPlug2
-// parameters and a crayon-sticker IGraphics UI (780x488) built from
-// Lexi's own hand-drawn assets (final art v1, 2026-11-05, draft 05d).
-// The art lives in the repo as base64 text (resources/art/*.png.b64 and
-// resources/fonts/*.ttf.b64) because the GitHub connector can only push
-// text files; decode_assets.py decodes them at CMake configure time
-// (see CMakeLists.txt). Bitmaps are drawn by code where they must move
-// (knob dot, Master handle, Level segments, pill text, preset numbers).
-// Smoke-test build: the code has NOT been compiled yet — the first
-// GitHub Actions run is the compile test. No human has heard it in Ableton.
+// parameters and a single-panel IGraphics UI (600x375).
+//
+// v0.3 UI (Mo is the designer now; Lexi's Canva is down): ONE flat
+// panel PNG ("panel.png", 600x375, palette-optimised) is the whole
+// background — header, labels, knob rings/faces, blank pills, blister,
+// Master track, Level frame, Panic circle+text, SAVE pill, display
+// sticker are all baked into it. The code draws ONLY what moves or
+// changes on top: knob dots, pill text + active red fill, preset
+// numbers, "Save", display text, Master handle, Level segments, knob
+// labels and the small readouts. This kills the v0.2.0 scale bug
+// (2x art loaded at scale 1, everything rendering 2x too big).
+// The panel lives in the repo as base64 text (resources/art/panel_*.json)
+// because the GitHub connector can only push text files;
+// decode_assets.py decodes it at CMake configure time (see CMakeLists.txt).
+// v0.3 fixes from the 2026-11-06 ear-test: knob dots / Master handle /
+// pill states were frozen or wrong because the code treated iPlug2's
+// NORMALISED control values (0..1) as raw ranges — all three now use
+// GetValue() directly. Echo Time crackle: the DSP slew-limits the delay
+// length (see DubruederschaftDSP). PLUG_NAME is ASCII "Dubruederschaft"
+// (Ableton sidebar shows it; the ü lives on in the header artwork).
 #include "Dubruederschaft.h"
 #include "IPlug_include_in_plug_src.h"
 
@@ -24,40 +35,38 @@
 using namespace dubruederschaft;
 
 // Superman palette, sampled from Lexi's images.png (2026-11-05).
-// IColor is ARGB: IColor(alpha, r, g, b). The panel itself is a bitmap
-// (panel_background.png), so these colours are only for code-drawn bits.
+// IColor is ARGB: IColor(alpha, r, g, b). The panel itself is a bitmap,
+// so these colours are only for code-drawn bits.
 #if IPLUG_EDITOR
-static const IColor kColNavy(255, 10, 30, 70);      // knob faces / display
-static const IColor kColYellow(255, 253, 252, 1);   // dots / display text
+static const IColor kColNavy(255, 10, 30, 70);      // pill text / display
+static const IColor kColYellow(255, 253, 252, 1);   // dots / handle / display text
 static const IColor kColWhite(255, 255, 255, 255);
 static const IColor kColMuted(255, 200, 215, 240);
 static const IColor kColGreen(255, 46, 160, 70);
 static const IColor kColSegYellow(255, 220, 200, 40);
 static const IColor kColOrange(255, 230, 140, 40);
 static const IColor kColMeterRed(255, 210, 60, 45);
+static const IColor kColPillRed(255, 209, 32, 32);  // active pill fill
 static const char* kFontHand = "PatrickHand-Regular"; // Lexi's handwritten font
 static constexpr double kPi = 3.14159265358979323846;
 
-// Knob: navy crayon face + Lexi's yellow ring (static, with the white
-// wobbly outline baked in) + a code-drawn rotating indicator dot.
-// The ring must NOT rotate (its -/+ would spin with it), so only the dot
-// moves. Drag behaviour comes from IKnobControlBase.
-class CrayonKnobControl : public IKnobControlBase
+// Knob: the ring + navy face are baked into the panel; the code draws
+// ONLY the rotating indicator dot + the label below. Drag behaviour
+// comes from IKnobControlBase.
+// FIX (v0.3): GetValue() is already NORMALISED (0..1) — the v0.2.0 code
+// treated it as the raw range (e.g. 200..2000 Hz), so the dot never moved.
+class KnobDotControl : public IKnobControlBase
 {
 public:
-  // ringBox: the ring's own box (57px, or 76px for Glide). The control
+  // ringBox: the ring's own box (44px, or 58px for Glide). The control
   // bounds are the ring box + 3px outline margin + label space below.
-  CrayonKnobControl(const IRECT& ringBox, int paramIdx, double min, double max,
-                    const IBitmap& face, const IBitmap& ring,
-                    const char* label, const char* subLabel = nullptr)
+  KnobDotControl(const IRECT& ringBox, int paramIdx,
+                 const char* label, const char* subLabel = nullptr)
     : IKnobControlBase(IRECT(ringBox.L - 3.f, ringBox.T - 3.f,
                          ringBox.R + 3.f,
-                         ringBox.B + 3.f + 22.f + (subLabel ? 16.f : 0.f)),
+                         ringBox.B + 3.f + 17.f + (subLabel ? 12.f : 0.f)),
                    paramIdx)
-    , mMin(min)
-    , mMax(max)
-    , mFace(face)
-    , mRing(ring)
+    , mRingBox(ringBox)
     , mLabelText(label)
     , mSubLabel(subLabel)
   {
@@ -65,48 +74,44 @@ public:
 
   void Draw(IGraphics& g) override
   {
-    const IRECT b = mRECT;
-    const float ringSize = b.W() - 6.f; // 57, or 76 for Glide
-    const float cx = b.L + b.W() / 2.f;
-    const float cy = b.T + b.W() / 2.f;
-    const float faceD = ringSize * 2.f / 3.f;
-    g.DrawBitmap(mFace, IRECT(cx - faceD / 2.f, cy - faceD / 2.f,
-                              cx + faceD / 2.f, cy + faceD / 2.f));
-    g.DrawBitmap(mRing, IRECT(b.L, b.T, b.L + b.W(), b.T + b.W()));
+    const float ringSize = mRingBox.W(); // 44, or 58 for Glide
+    const float cx = (mRingBox.L + mRingBox.R) / 2.f;
+    const float cy = (mRingBox.T + mRingBox.B) / 2.f;
     // Indicator dot: 7:30 at min, sweeping 270 deg clockwise to 4:30.
-    const double norm = (GetValue() - mMin) / (mMax - mMin);
+    // GetValue() is normalised 0..1 — use it directly.
+    const double norm = GetValue();
     const double theta = (-135.0 + 270.0 * norm) * kPi / 180.0;
-    const float dr = ringSize / 3.f - 4.f;
+    const float dr = ringSize / 3.f - 3.f;
     const float dx = cx + dr * static_cast<float>(std::sin(theta));
     const float dy = cy - dr * static_cast<float>(std::cos(theta));
-    g.FillEllipse(kColYellow, IRECT(dx - 3.5f, dy - 3.5f, dx + 3.5f, dy + 3.5f));
-    const float labelTop = b.T + b.W() + 7.f;
-    g.DrawText(IText(15, COLOR_WHITE, kFontHand, EAlign::Center), mLabelText,
-               IRECT(b.L, labelTop, b.R, labelTop + 15.f));
+    g.FillEllipse(kColYellow, IRECT(dx - 3.f, dy - 3.f, dx + 3.f, dy + 3.f));
+    const float labelTop = mRingBox.B + 3.f + 5.f;
+    g.DrawText(IText(12, COLOR_WHITE, kFontHand, EAlign::Center), mLabelText,
+               IRECT(mRECT.L, labelTop, mRECT.R, labelTop + 12.f));
     if (mSubLabel)
-      g.DrawText(IText(11, kColMuted, kFontHand, EAlign::Center), mSubLabel,
-                 IRECT(b.L, labelTop + 16.f, b.R, labelTop + 31.f));
+      g.DrawText(IText(8, kColMuted, kFontHand, EAlign::Center), mSubLabel,
+                 IRECT(mRECT.L, labelTop + 12.f, mRECT.R, labelTop + 24.f));
   }
 
 private:
-  double mMin, mMax;
-  IBitmap mFace, mRing;
+  IRECT mRingBox;
   const char* mLabelText;
   const char* mSubLabel;
 };
 
-// Wave / Mode pill: one option of an enum param. The pill bitmap is
-// blank (no text) — the code draws the centred label, so the same two
-// bitmaps serve all six pills. Active = red pill, inactive = yellow.
+// Wave / Mode pill: one option of an enum param. The yellow pill shape
+// is baked into the panel; the code draws the centred label, and a red
+// fill (inset, so Lexi's wobbly yellow outline still shows) when active.
+// FIX (v0.3): option values are NORMALISED (0, 0.5, 1) — the v0.2.0 code
+// passed raw indices (0, 1, 2), so clicking Saw lit Saw but played
+// Square, and Square/Two-Tone could never light up.
 class PillButtonControl : public IControl
 {
 public:
   PillButtonControl(const IRECT& bounds, int paramIdx, double optionValue,
-                    const IBitmap& yellow, const IBitmap& red, const char* text)
+                    const char* text)
     : IControl(bounds, paramIdx)
     , mOption(optionValue)
-    , mYellow(yellow)
-    , mRed(red)
     , mText(text)
   {
   }
@@ -114,8 +119,14 @@ public:
   void Draw(IGraphics& g) override
   {
     const bool active = GetValue() == mOption;
-    g.DrawBitmap(active ? mRed : mYellow, mRECT);
-    g.DrawText(IText(12, active ? COLOR_WHITE : kColNavy, kFontHand, EAlign::Center),
+    if (active)
+    {
+      g.FillRoundRect(kColPillRed,
+                      IRECT(mRECT.L + 2.f, mRECT.T + 2.f,
+                            mRECT.R - 2.f, mRECT.B - 2.f),
+                      8.f);
+    }
+    g.DrawText(IText(9, active ? COLOR_WHITE : kColNavy, kFontHand, EAlign::Center),
                mText, mRECT);
   }
 
@@ -127,18 +138,17 @@ public:
 
 private:
   double mOption;
-  IBitmap mYellow, mRed;
   const char* mText;
 };
 
-// Momentary Trigger: Lexi's yellow circle. Sound while pressed.
-class BitmapTriggerControl : public IControl
+// Trigger (momentary): the yellow circle is baked into the panel; the
+// code draws a white ring while pressed + the label below.
+class TriggerButtonControl : public IControl
 {
 public:
-  BitmapTriggerControl(const IRECT& bounds, const IBitmap& bitmap,
+  TriggerButtonControl(const IRECT& bounds,
                        std::function<void(bool)> setTrigger, const char* label)
     : IControl(bounds)
-    , mBitmap(bitmap)
     , mSetTrigger(setTrigger)
     , mLabel(label)
   {
@@ -146,16 +156,12 @@ public:
 
   void Draw(IGraphics& g) override
   {
-    IRECT circleRect(mRECT.L, mRECT.T, mRECT.R, mRECT.T + 68.f);
+    // Circle square = top square of the control rect.
+    IRECT circle(mRECT.L, mRECT.T, mRECT.R, mRECT.T + mRECT.W());
     if (mPressed)
-    {
-      const float ix = circleRect.W() * 0.03f, iy = circleRect.H() * 0.03f;
-      circleRect = IRECT(circleRect.L + ix, circleRect.T + iy,
-                         circleRect.R - ix, circleRect.B - iy);
-    }
-    g.DrawBitmap(mBitmap, circleRect);
-    g.DrawText(IText(15, COLOR_WHITE, kFontHand, EAlign::Center), mLabel,
-               IRECT(mRECT.L, mRECT.T + 69.f, mRECT.R, mRECT.T + 84.f));
+      g.DrawEllipse(COLOR_WHITE, circle, nullptr, 2.f);
+    g.DrawText(IText(12, COLOR_WHITE, kFontHand, EAlign::Center), mLabel,
+               IRECT(mRECT.L, mRECT.B - 13.f, mRECT.R, mRECT.B));
   }
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
@@ -173,21 +179,20 @@ public:
   }
 
 private:
-  IBitmap mBitmap;
   std::function<void(bool)> mSetTrigger;
   const char* mLabel;
   bool mPressed = false;
 };
 
-// Hold latch: Lexi's red circle. A white ring shows when latched.
-class BitmapHoldControl : public IControl
+// Hold latch: the red circle is baked into the panel; a white ring
+// shows when latched + the label below.
+class HoldButtonControl : public IControl
 {
 public:
-  BitmapHoldControl(const IRECT& bounds, const IBitmap& bitmap,
+  HoldButtonControl(const IRECT& bounds,
                     std::function<bool()> getHold, std::function<void(bool)> setHold,
                     const char* label)
     : IControl(bounds)
-    , mBitmap(bitmap)
     , mGetHold(getHold)
     , mSetHold(setHold)
     , mLabel(label)
@@ -196,12 +201,11 @@ public:
 
   void Draw(IGraphics& g) override
   {
-    const IRECT circleRect(mRECT.L, mRECT.T, mRECT.R, mRECT.T + 62.f);
-    g.DrawBitmap(mBitmap, circleRect);
+    IRECT circle(mRECT.L, mRECT.T, mRECT.R, mRECT.T + mRECT.W());
     if (mGetHold())
-      g.DrawEllipse(COLOR_WHITE, circleRect, nullptr, 3.f);
-    g.DrawText(IText(15, COLOR_WHITE, kFontHand, EAlign::Center), mLabel,
-               IRECT(mRECT.L, mRECT.T + 66.f, mRECT.R, mRECT.T + 81.f));
+      g.DrawEllipse(COLOR_WHITE, circle, nullptr, 2.f);
+    g.DrawText(IText(12, COLOR_WHITE, kFontHand, EAlign::Center), mLabel,
+               IRECT(mRECT.L, mRECT.B - 13.f, mRECT.R, mRECT.B));
   }
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
@@ -211,37 +215,29 @@ public:
   }
 
 private:
-  IBitmap mBitmap;
   std::function<bool()> mGetHold;
   std::function<void(bool)> mSetHold;
   const char* mLabel;
 };
 
-// Panic button (Lexi, 2026-11-05): red circle + her "KILL THE REGIME"
-// text, attached to kParamPanic. ON = total mute. A white ring shows
+// Panic button (Lexi, 2026-11-05): the red circle + "KILL THE REGIME"
+// text are baked into the panel. ON = total mute. A white ring shows
 // while it is on, so a latched panic is visible at a glance.
 class PanicButtonControl : public IControl
 {
 public:
-  PanicButtonControl(const IRECT& bounds, int paramIdx,
-                     const IBitmap& circle, const IBitmap& text)
+  PanicButtonControl(const IRECT& bounds, int paramIdx)
     : IControl(bounds, paramIdx)
-    , mCircle(circle)
-    , mText(text)
   {
   }
 
   void Draw(IGraphics& g) override
   {
-    const IRECT circleRect(mRECT.L, mRECT.T, mRECT.R, mRECT.T + 82.f);
-    g.DrawBitmap(mCircle, circleRect);
-    const float cx = (circleRect.L + circleRect.R) / 2.f;
-    const float cy = (circleRect.T + circleRect.B) / 2.f;
-    g.DrawBitmap(mText, IRECT(cx - 27.f, cy - 24.f, cx + 27.f, cy + 24.f));
+    IRECT circle(mRECT.L, mRECT.T, mRECT.R, mRECT.T + mRECT.W());
     if (GetValue() > 0.5)
-      g.DrawEllipse(COLOR_WHITE, circleRect, nullptr, 3.f);
-    g.DrawText(IText(11, COLOR_WHITE, kFontHand, EAlign::Center), "Panic button",
-               IRECT(mRECT.L, mRECT.T + 85.f, mRECT.R, mRECT.T + 98.f));
+      g.DrawEllipse(COLOR_WHITE, circle, nullptr, 2.f);
+    g.DrawText(IText(8, COLOR_WHITE, kFontHand, EAlign::Center), "Panic button",
+               IRECT(mRECT.L, mRECT.B - 10.f, mRECT.R, mRECT.B));
   }
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
@@ -249,39 +245,33 @@ public:
     SetValue(GetValue() > 0.5 ? 0.0 : 1.0);
     SetDirty(true);
   }
-
-private:
-  IBitmap mCircle, mText;
 };
 
-// Master fader: Lexi's vertical pill track + yellow handle bitmaps.
-// Drag behaviour comes from ISliderControlBase; only the drawing is custom.
+// Master fader: the vertical pill track is baked into the panel; the
+// code draws ONLY the yellow handle (a circle) at the value position.
+// Drag behaviour comes from ISliderControlBase.
+// FIX (v0.3): GetValue() is already NORMALISED (0..1) — the v0.2.0 code
+// divided it by 100, pinning the handle at the bottom.
 class MasterFaderControl : public ISliderControlBase
 {
 public:
-  MasterFaderControl(const IRECT& bounds, int paramIdx,
-                     const IBitmap& track, const IBitmap& handle)
+  MasterFaderControl(const IRECT& bounds, int paramIdx)
     : ISliderControlBase(bounds, paramIdx, EDirection::Vertical)
-    , mTrack(track)
-    , mHandle(handle)
   {
   }
 
   void Draw(IGraphics& g) override
   {
-    g.DrawBitmap(mTrack, mRECT);
-    // Master is a 0..100 percentage param. The handle centre runs from
-    // the bottom cap centre to the top cap centre (19px in from each end).
-    const double v = GetValue() / 100.0;
-    const float top = mRECT.T + 19.f;
-    const float bottom = mRECT.B - 19.f;
+    // Master is a 0..100 percentage param; GetValue() is normalised.
+    const double v = GetValue();
+    const float top = mRECT.T + 15.f;
+    const float bottom = mRECT.B - 15.f;
     const float cy = bottom - static_cast<float>(v) * (bottom - top);
     const float cx = (mRECT.L + mRECT.R) / 2.f;
-    g.DrawBitmap(mHandle, IRECT(cx - 21.f, cy - 21.f, cx + 21.f, cy + 21.f));
+    g.FillEllipse(kColYellow, IRECT(cx - 13.f, cy - 13.f, cx + 13.f, cy + 13.f));
+    g.DrawEllipse(COLOR_WHITE, IRECT(cx - 13.f, cy - 13.f, cx + 13.f, cy + 13.f),
+                  nullptr, 1.5f);
   }
-
-private:
-  IBitmap mTrack, mHandle;
 };
 
 // Master value readout under the fader ("70 %"), redrawn every frame.
@@ -298,7 +288,7 @@ public:
   {
     char text[16];
     std::snprintf(text, sizeof(text), "%.0f %%", mGetValue());
-    g.DrawText(IText(13, COLOR_WHITE, kFontHand, EAlign::Center), text, mRECT);
+    g.DrawText(IText(10, COLOR_WHITE, kFontHand, EAlign::Center), text, mRECT);
     SetDirty(true);
   }
 
@@ -307,23 +297,20 @@ private:
 };
 
 // Segmented level meter, green (bottom) -> yellow -> red (top), bottom-up.
-// The wobbly frame is Lexi's bitmap; the 6 segments are drawn by code
-// because they light up in real time. Reads the peak level from the
+// The wobbly frame is baked into the panel; the 6 segments are drawn by
+// code because they light up in real time. Reads the peak level from the
 // plugin via a lambda; no IGraphics sender needed.
 class LevelMeterControl : public IControl
 {
 public:
-  LevelMeterControl(const IRECT& bounds, const IBitmap& frame,
-                    std::function<float()> getLevel)
+  LevelMeterControl(const IRECT& bounds, std::function<float()> getLevel)
     : IControl(bounds)
-    , mFrame(frame)
     , mGetLevel(getLevel)
   {
   }
 
   void Draw(IGraphics& g) override
   {
-    g.DrawBitmap(mFrame, mRECT);
     const float v = mGetLevel(); // 0..~1 (post-master, post-limiter peak)
     // sqrt() stretches low levels so a quiet-but-audible siren still
     // lights the bottom segment; without it the first segment only
@@ -332,7 +319,7 @@ public:
     const int nSegs = 6;
     const IColor segCols[6] = {kColGreen, kColGreen, kColSegYellow,
                                kColSegYellow, kColOrange, kColMeterRed};
-    const IRECT segArea(mRECT.L + 5.f, mRECT.T + 5.f, mRECT.R - 5.f, mRECT.B - 5.f);
+    const IRECT segArea(mRECT.L + 4.f, mRECT.T + 4.f, mRECT.R - 4.f, mRECT.B - 4.f);
     const float segH = segArea.H() / static_cast<float>(nSegs);
     for (int i = 0; i < nSegs; ++i)
     {
@@ -350,7 +337,6 @@ public:
   }
 
 private:
-  IBitmap mFrame;
   std::function<float()> mGetLevel;
 };
 
@@ -358,6 +344,8 @@ private:
 // sounding from MIDI (e.g. "C4 • 261 Hz"), or "MIDI: —" when the siren
 // is played from Trigger/Hold instead. Reads the atomic note number;
 // redraws every frame like the level meter.
+// v0.3: moved down (y155-170 at 780 scale) — v0.2.0 overlapped the
+// Pitch label.
 class MidiNoteControl : public IControl
 {
 public:
@@ -383,7 +371,7 @@ public:
     {
       std::snprintf(text, sizeof(text), "MIDI: —");
     }
-    g.DrawText(IText(11, COLOR_WHITE, kFontHand, EAlign::Center), text, mRECT);
+    g.DrawText(IText(8, COLOR_WHITE, kFontHand, EAlign::Center), text, mRECT);
     SetDirty(true); // keep updating while notes change
   }
 
@@ -391,32 +379,30 @@ private:
   std::function<int()> mGetNote;
 };
 
-// Preset blister: Lexi's 8x2 frame + 16 circles (numbers drawn by code,
-// so the same bitmap serves every slot). Tap a circle to load; with
-// SAVE armed, tap to save into that slot.
+// Preset blister: the 8x2 frame + 16 circles are baked into the panel;
+// the code draws ONLY the numbers. Tap a circle to load; with SAVE
+// armed, tap to save into that slot.
 class PresetBlisterControl : public IControl
 {
 public:
-  PresetBlisterControl(const IRECT& bounds, const IBitmap& blister,
-                       std::function<void(int)> onSlot)
+  PresetBlisterControl(const IRECT& bounds, std::function<void(int)> onSlot)
     : IControl(bounds)
-    , mBlister(blister)
     , mOnSlot(onSlot)
   {
   }
 
   void Draw(IGraphics& g) override
   {
-    g.DrawBitmap(mBlister, mRECT);
     for (int slot = 0; slot < 16; ++slot)
     {
       const int col = slot % 8, row = slot / 8;
-      const float cx = 66.f + 291.f / 8.f * (col + 0.5f);
-      const float cy = 392.f + 74.f / 2.f * (row + 0.5f);
+      // 780-scale centres, scaled to the 600x375 panel.
+      const float cx = (66.f + 291.f / 8.f * (col + 0.5f)) * 0.769231f;
+      const float cy = (392.f + 37.f * (row + 0.5f)) * 0.768443f;
       char num[4];
       std::snprintf(num, sizeof(num), "%d", slot + 1);
-      g.DrawText(IText(9, COLOR_WHITE, kFontHand, EAlign::Center), num,
-                 IRECT(cx - 12.f, cy - 10.f, cx + 12.f, cy + 2.f));
+      g.DrawText(IText(7, COLOR_WHITE, kFontHand, EAlign::Center), num,
+                 IRECT(cx - 9.f, cy - 8.f, cx + 9.f, cy + 2.f));
     }
   }
 
@@ -425,10 +411,10 @@ public:
     for (int slot = 0; slot < 16; ++slot)
     {
       const int col = slot % 8, row = slot / 8;
-      const float cx = 66.f + 291.f / 8.f * (col + 0.5f);
-      const float cy = 392.f + 74.f / 2.f * (row + 0.5f);
+      const float cx = (66.f + 291.f / 8.f * (col + 0.5f)) * 0.769231f;
+      const float cy = (392.f + 37.f * (row + 0.5f)) * 0.768443f;
       const float dx = x - cx, dy = y - cy;
-      if (dx * dx + dy * dy < 14.f * 14.f)
+      if (dx * dx + dy * dy < 11.f * 11.f)
       {
         mOnSlot(slot);
         break;
@@ -437,33 +423,25 @@ public:
   }
 
 private:
-  IBitmap mBlister;
   std::function<void(int)> mOnSlot;
 };
 
-// SAVE pill: Lexi's yellow capsule + "Save" text. Arms the save flow;
-// the next tapped preset slot receives the current sound.
+// SAVE pill: the yellow capsule is baked into the panel; the code draws
+// ONLY the "Save" text. Arms the save flow; the next tapped preset
+// slot receives the current sound.
 class SaveButtonControl : public IControl
 {
 public:
-  SaveButtonControl(const IRECT& bounds, const IBitmap& pill,
-                    std::function<void()> onSave)
+  SaveButtonControl(const IRECT& bounds, std::function<void()> onSave)
     : IControl(bounds)
-    , mPill(pill)
     , mOnSave(onSave)
   {
   }
 
   void Draw(IGraphics& g) override
   {
-    IRECT r = mRECT;
-    if (mPressed)
-    {
-      const float ix = r.W() * 0.03f, iy = r.H() * 0.03f;
-      r = IRECT(r.L + ix, r.T + iy, r.R - ix, r.B - iy);
-    }
-    g.DrawBitmap(mPill, r);
-    g.DrawText(IText(18, kColNavy, kFontHand, EAlign::Center), "Save", mRECT);
+    g.DrawText(IText(14, mPressed ? kColMuted : kColNavy, kFontHand, EAlign::Center),
+               "Save", mRECT);
   }
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
@@ -480,7 +458,6 @@ public:
   }
 
 private:
-  IBitmap mPill;
   std::function<void()> mOnSave;
   bool mPressed = false;
 };
@@ -507,128 +484,89 @@ Dubruederschaft::Dubruederschaft(const InstanceInfo& info)
     return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS);
   };
 
-  // Layout = approved draft 05d / final art v1 (780x488). Coordinates
-  // are the draft's: knob rows at x 66/183/300, Voice pills at x 412,
-  // Glide + Panic in the Reverb row, Master + Level far right, blister
-  // strip at the bottom aligned with the knob rows (66-357).
+  // Layout = approved draft 05d, scaled to the 600x375 panel
+  // (x * 600/780, y * 375/488). The panel PNG holds all static art;
+  // controls only draw what moves or changes.
   mLayoutFunc = [&](IGraphics* pGraphics) {
     if (pGraphics->NControls())
       return; // fixed-size panel: create once, no resize handling
 
     pGraphics->LoadFont("PatrickHand-Regular", PATRICK_HAND_FN);
-    pGraphics->LoadFont("Roboto-Regular", ROBOTO_FN);
 
-    // All bitmaps live in resources/art/ (decoded from .b64 at configure
-    // time). LoadBitmap looks them up by bare filename in the bundle.
-    IBitmap bmpBackground = pGraphics->LoadBitmap("panel_background.png");
-    IBitmap bmpHeader = pGraphics->LoadBitmap("header_dubruederschaft.png");
-    IBitmap bmpTrigger = pGraphics->LoadBitmap("trigger_circle.png");
-    IBitmap bmpHold = pGraphics->LoadBitmap("hold_circle.png");
-    IBitmap bmpFace = pGraphics->LoadBitmap("knob_face.png");
-    IBitmap bmpRing = pGraphics->LoadBitmap("knob_ring_outlined.png");
-    IBitmap bmpPillYellow = pGraphics->LoadBitmap("pill_yellow.png");
-    IBitmap bmpPillRed = pGraphics->LoadBitmap("pill_red.png");
-    IBitmap bmpPanicCircle = pGraphics->LoadBitmap("panic_circle.png");
-    IBitmap bmpPanicText = pGraphics->LoadBitmap("panic_text.png");
-    IBitmap bmpMasterTrack = pGraphics->LoadBitmap("master_track.png");
-    IBitmap bmpMasterHandle = pGraphics->LoadBitmap("master_handle.png");
-    IBitmap bmpLevelFrame = pGraphics->LoadBitmap("level_frame.png");
-    IBitmap bmpBlister = pGraphics->LoadBitmap("preset_blister.png");
-    IBitmap bmpSave = pGraphics->LoadBitmap("save_pill.png");
-    IBitmap bmpDisplay = pGraphics->LoadBitmap("display_sticker.png");
-    IBitmap bmpLabelSiren = pGraphics->LoadBitmap("label_siren_vertical.png");
-    IBitmap bmpLabelEcho = pGraphics->LoadBitmap("label_echo_vertical.png");
-    IBitmap bmpLabelReverb = pGraphics->LoadBitmap("label_reverb_vertical.png");
-    IBitmap bmpLabelVoice = pGraphics->LoadBitmap("label_voice_vertical.png");
-    IBitmap bmpLabelMaster = pGraphics->LoadBitmap("label_master.png");
-    IBitmap bmpLabelLevel = pGraphics->LoadBitmap("label_level.png");
-    IBitmap bmpLabelPresets = pGraphics->LoadBitmap("label_presets_vertical.png");
-
-    // Background first: Lexi's blue crayon panel, no controls on it.
-    pGraphics->AttachControl(new IBitmapControl(IRECT(0, 0, 780, 488), bmpBackground));
-
-    // Header — Lexi's wobbly "Dubrüderschaft" bitmap (Title Case, v0.2.0:
-    // all-caps was hard to read, per her first Ableton feedback).
-    pGraphics->AttachControl(new IBitmapControl(IRECT(26, 12, 364, 54), bmpHeader));
-    pGraphics->AttachControl(new ITextControl(IRECT(640, 20, 754, 31),
-                                              "v0.2.0 • VST3 Instrument",
-                                              IText(11, kColMuted, kFontHand, EAlign::Far)),
+    // The single background: panel.png (decoded from panel_*.json at
+    // configure time). LoadBitmap looks it up by bare filename.
+    IBitmap bmpPanel = pGraphics->LoadBitmap("panel.png");
+    pGraphics->AttachControl(new IBitmapControl(IRECT(0, 0, 600, 375), bmpPanel));
+    pGraphics->AttachControl(new ITextControl(IRECT(492, 15, 580, 24),
+                                              "v0.3.0 • VST3 Instrument",
+                                              IText(8, kColMuted, kFontHand, EAlign::Far)),
                              kCtrlTagVersionNumber);
 
-    // Section labels (Lexi's vertical/horizontal assets).
-    pGraphics->AttachControl(new IBitmapControl(IRECT(30, 73, 48, 121), bmpLabelSiren));
-    pGraphics->AttachControl(new IBitmapControl(IRECT(30, 183, 49, 224), bmpLabelEcho));
-    pGraphics->AttachControl(new IBitmapControl(IRECT(30, 282, 48, 342), bmpLabelReverb));
-    pGraphics->AttachControl(new IBitmapControl(IRECT(366, 101, 399, 199), bmpLabelVoice));
-    pGraphics->AttachControl(new IBitmapControl(IRECT(628, 44, 692, 62), bmpLabelMaster));
-    pGraphics->AttachControl(new IBitmapControl(IRECT(712, 44, 764, 62), bmpLabelLevel));
-    pGraphics->AttachControl(new IBitmapControl(IRECT(28, 389, 50, 469), bmpLabelPresets));
-
     // Siren row: Trigger (momentary) + Hold (latch) + Pitch.
-    pGraphics->AttachControl(new BitmapTriggerControl(
-        IRECT(63, 63, 131, 150), bmpTrigger,
+    pGraphics->AttachControl(new TriggerButtonControl(
+        IRECT(48, 48, 101, 115),
         [this](bool on) { SetTrigger(on); }, "Trigger"));
-    pGraphics->AttachControl(new BitmapHoldControl(
-        IRECT(183, 66, 245, 150), bmpHold,
+    pGraphics->AttachControl(new HoldButtonControl(
+        IRECT(141, 51, 188, 115),
         [this]() { return GetHold(); },
         [this](bool on) { SetHold(on); }, "Hold"));
-    pGraphics->AttachControl(new CrayonKnobControl(
-        IRECT(300, 69, 357, 126), kParamPitch, 200., 2000., bmpFace, bmpRing, "Pitch"));
-    // MIDI note readout under Pitch (v0.2.0): which note is sounding.
+    pGraphics->AttachControl(new KnobDotControl(
+        IRECT(231, 53, 275, 97), kParamPitch, "Pitch"));
+    // MIDI note readout under Pitch (v0.3: its own line, no overlap).
     pGraphics->AttachControl(new MidiNoteControl(
-        IRECT(286, 147, 377, 162),
+        IRECT(220, 119, 290, 131),
         [this]() { return GetMidiNote(); }));
 
     // Echo row.
-    pGraphics->AttachControl(new CrayonKnobControl(
-        IRECT(66, 176, 123, 233), kParamEchoTime, 0., 1000., bmpFace, bmpRing, "Time"));
-    pGraphics->AttachControl(new CrayonKnobControl(
-        IRECT(183, 176, 240, 233), kParamEchoFeedback, 0., 85., bmpFace, bmpRing, "Feedback"));
-    pGraphics->AttachControl(new CrayonKnobControl(
-        IRECT(300, 176, 357, 233), kParamEchoMix, 0., 100., bmpFace, bmpRing, "Mix"));
+    pGraphics->AttachControl(new KnobDotControl(
+        IRECT(51, 135, 95, 179), kParamEchoTime, "Time"));
+    pGraphics->AttachControl(new KnobDotControl(
+        IRECT(141, 135, 185, 179), kParamEchoFeedback, "Feedback"));
+    pGraphics->AttachControl(new KnobDotControl(
+        IRECT(231, 135, 275, 179), kParamEchoMix, "Mix"));
 
     // Reverb row.
-    pGraphics->AttachControl(new CrayonKnobControl(
-        IRECT(66, 283, 123, 340), kParamReverbSize, 0., 100., bmpFace, bmpRing, "Size / Decay"));
-    pGraphics->AttachControl(new CrayonKnobControl(
-        IRECT(183, 283, 240, 340), kParamReverbDamp, 0., 100., bmpFace, bmpRing, "Damp"));
-    pGraphics->AttachControl(new CrayonKnobControl(
-        IRECT(300, 283, 357, 340), kParamReverbMix, 0., 100., bmpFace, bmpRing, "Mix"));
+    pGraphics->AttachControl(new KnobDotControl(
+        IRECT(51, 218, 95, 262), kParamReverbSize, "Size / Decay"));
+    pGraphics->AttachControl(new KnobDotControl(
+        IRECT(141, 218, 185, 262), kParamReverbDamp, "Damp"));
+    pGraphics->AttachControl(new KnobDotControl(
+        IRECT(231, 218, 275, 262), kParamReverbMix, "Mix"));
 
-    // VOICE column: Wave + Mode pills, Glide (big, Reverb row) + Panic.
+    // VOICE column: Wave + Mode pills (normalised options 0, 0.5, 1),
+    // Glide (big, Reverb row) + Panic.
     static const char* kWaveNames[3] = {"Sine", "Saw", "Square"};
     for (int i = 0; i < 3; ++i)
       pGraphics->AttachControl(new PillButtonControl(
-          IRECT(409.f + i * 72.f, 78.f, 475.f + i * 72.f, 116.f),
-          kParamWave, (double)i, bmpPillYellow, bmpPillRed, kWaveNames[i]));
+          IRECT(315.f + i * 55.f, 60.f, 365.f + i * 55.f, 89.f),
+          kParamWave, (double)i / 2.0, kWaveNames[i]));
     static const char* kModeNames[3] = {"Manual", "Auto Wail", "Two-Tone"};
     for (int i = 0; i < 3; ++i)
       pGraphics->AttachControl(new PillButtonControl(
-          IRECT(409.f + i * 72.f, 185.f, 475.f + i * 72.f, 223.f),
-          kParamMode, (double)i, bmpPillYellow, bmpPillRed, kModeNames[i]));
-    pGraphics->AttachControl(new CrayonKnobControl(
-        IRECT(412, 273, 488, 349), kParamGlide, 0., 500., bmpFace, bmpRing,
-        "Glide", "0-500 ms"));
+          IRECT(315.f + i * 55.f, 142.f, 365.f + i * 55.f, 171.f),
+          kParamMode, (double)i / 2.0, kModeNames[i]));
+    pGraphics->AttachControl(new KnobDotControl(
+        IRECT(317, 210, 375, 268), kParamGlide, "Glide", "0-500 ms"));
     pGraphics->AttachControl(new PanicButtonControl(
-        IRECT(539, 270, 621, 368), kParamPanic, bmpPanicCircle, bmpPanicText));
+        IRECT(415, 208, 478, 283), kParamPanic));
 
     // Master fader (vertical) + value readout + segmented level meter.
     pGraphics->AttachControl(new MasterFaderControl(
-        IRECT(653, 69, 697, 354), kParamMaster, bmpMasterTrack, bmpMasterHandle));
+        IRECT(502, 53, 536, 272), kParamMaster));
     pGraphics->AttachControl(new MasterValueControl(
-        IRECT(653, 355, 697, 372),
+        IRECT(502, 273, 536, 286),
         [this]() { return GetParam(kParamMaster)->Value(); }));
     pGraphics->AttachControl(new LevelMeterControl(
-        IRECT(710, 70, 752, 353), bmpLevelFrame,
+        IRECT(546, 54, 578, 271),
         [this]() { return GetMeterLevel(); }));
-    pGraphics->AttachControl(new ITextControl(IRECT(712, 355, 764, 368), "green low",
-                                              IText(10, kColMuted, kFontHand, EAlign::Near)));
-    pGraphics->AttachControl(new ITextControl(IRECT(712, 368, 764, 381), "red high",
-                                              IText(10, kColMuted, kFontHand, EAlign::Near)));
+    pGraphics->AttachControl(new ITextControl(IRECT(548, 271, 588, 281), "green low",
+                                              IText(8, kColMuted, kFontHand, EAlign::Near)));
+    pGraphics->AttachControl(new ITextControl(IRECT(548, 284, 588, 294), "red high",
+                                              IText(8, kColMuted, kFontHand, EAlign::Near)));
 
     // Presets strip: blister (16 slots), SAVE, preset-name display.
     pGraphics->AttachControl(new PresetBlisterControl(
-        IRECT(64, 390, 359, 468), bmpBlister,
+        IRECT(49, 300, 276, 360),
         [this](int slot) {
           if (mSaveArmed)
           {
@@ -641,22 +579,19 @@ Dubruederschaft::Dubruederschaft(const InstanceInfo& info)
           }
         }));
     pGraphics->AttachControl(new SaveButtonControl(
-        IRECT(439, 407, 536, 456), bmpSave,
+        IRECT(338, 313, 412, 351),
         [this]() {
           mSaveArmed = true;
           std::snprintf(mPresetDisplay, sizeof(mPresetDisplay), "Tap a slot to save");
           UpdatePresetDisplay();
         }));
-    pGraphics->AttachControl(new IBitmapControl(IRECT(552, 412, 754, 446), bmpDisplay));
-    pGraphics->AttachControl(new ITextControl(IRECT(552, 412, 754, 446),
+    pGraphics->AttachControl(new ITextControl(IRECT(425, 317, 580, 343),
                                               mPresetDisplay,
-                                              IText(17, kColYellow, kFontHand, EAlign::Center),
-                                              COLOR_TRANSPARENT),
+                                              IText(13, kColYellow, kFontHand, EAlign::Center)),
                              kCtrlTagPresetDisplay);
-    // Preset hint, centred exactly below the blister (draft 05, Lexi).
-    pGraphics->AttachControl(new ITextControl(IRECT(66, 469, 357, 482),
-                                              "Tap a slot = load   •   SAVE + slot = save",
-                                              IText(12, kColMuted, kFontHand, EAlign::Center)));
+    pGraphics->AttachControl(new ITextControl(IRECT(51, 361, 275, 371),
+                                              "Tap a slot = load • SAVE + slot = save",
+                                              IText(9, kColMuted, kFontHand, EAlign::Center)));
   };
 #endif // IPLUG_EDITOR
 }
