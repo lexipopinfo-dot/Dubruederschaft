@@ -1,6 +1,6 @@
-# Dubrüderschaft — macOS VST3 smoke-test build (Phase 2, 2026-11-05).
+# Dubruderschaft — macOS VST3 smoke-test build (Phase 2, 2026-11-05).
 #
-# Goal: produce ONE file, Dubruederschaft.vst3 (Intel x86_64, Monterey
+# Goal: produce ONE file, Dubruderschaft.vst3 (Intel x86_64, Monterey
 # compatible), as a workflow artifact. Lexi copies it to
 # ~/Library/Audio/Plug-Ins/VST3/ on her MacBook Pro 2016. No installer.
 #
@@ -15,7 +15,7 @@
 #   exact error is the deliverable, not a claim of success.
 # - Ad-hoc signing only (codesign -s -). No paid Apple Developer account,
 #   no notarisation — this is for personal, local use only.
-# - VST3 only (FORMATS VST3 in Dubruederschaft/CMakeLists.txt).
+# - VST3 only (FORMATS VST3 in Dubruderschaft/CMakeLists.txt).
 # - The built bundle is NOT run on the ARM runner (it is x86_64); only
 #   Lexi's Intel Mac can prove it loads in Ableton 12.
 name: Build macOS VST3 (smoke test)
@@ -23,14 +23,14 @@ name: Build macOS VST3 (smoke test)
 on:
   push:
     paths:
-      - 'Dubruederschaft/**'
+      - 'Dubruderschaft/**'
       - 'CMakeLists.txt'
       - 'CMakePresets.json'
       - '.github/workflows/build-macos-vst3.yml'
   workflow_dispatch:
 
 env:
-  PROJECT_NAME: Dubruederschaft
+  PROJECT_NAME: Dubruderschaft
 
 jobs:
   build-macos-vst3:
