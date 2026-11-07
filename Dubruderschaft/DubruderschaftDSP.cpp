@@ -1,4 +1,5 @@
 // Dubruderschaft — DSP core implementation. See header for design notes.
+// v0.3.2: panic() clears latched Hold + Trigger (ear-test fix).
 // v0.3.1: Mode is gone; two standalone LFOs (Sine = rectified cosine,
 // Pulse = bipolar square) + Chopper gate + one-shot panic().
 #include "DubruderschaftDSP.h"
@@ -68,6 +69,11 @@ void DSP::reset() {
 void DSP::panic() {
   // Kill the voice and reset to idle. The echo/reverb buffers are
   // deliberately NOT touched here — the tails keep ringing.
+  // v0.3.2 FIX 1: also clear the DSP's own trigger_/hold_ (defense in
+  // depth). Otherwise a latched Hold re-attacks the voice on the next
+  // block via isSounding() even though the envelope was zeroed.
+  trigger_ = false;
+  hold_ = false;
   envelope_ = 0.0;
   phase_ = 0.0;
   sinePhase_ = 0.0;
