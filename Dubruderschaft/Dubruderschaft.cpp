@@ -1,8 +1,8 @@
-// Dubruderschaft — iPlug2 plugin implementation (v0.3.1, 2026-11-06).
+// Dubruderschaft — iPlug2 plugin implementation (v0.3.2, 2026-11-07).
 // Wires the framework-free DSP core (DubruderschaftDSP.*) to iPlug2
 // parameters and a single-panel IGraphics UI (600x500).
 //
-// v0.3.1 UI: ONE flat panel PNG ("panel.png", 600x500) is the whole
+// v0.3.2 UI: ONE flat panel PNG ("panel.png", 600x500) is the whole
 // background — header, labels, knob rings/faces, blank pills, blister,
 // Master track, Level frame, KILL THE REGIME circle, SAVE pill, display
 // sticker are all baked into it. The code draws ONLY what moves or
@@ -52,7 +52,7 @@ static constexpr double kPi = 3.14159265358979323846;
 
 // Knob: the ring + navy face are baked into the panel; the code draws
 // ONLY the rotating indicator dot + the label below (18pt Patrick Hand,
-// v0.3.1 font deal) + an optional sub-label (10pt). Drag behaviour
+// v0.3.2 font deal) + an optional sub-label (10pt). Drag behaviour
 // comes from IKnobControlBase.
 // GetValue() is NORMALISED (0..1) — use it directly, never as raw units
 // (that was the v0.2.0 bug).
@@ -221,7 +221,7 @@ private:
   const char* mLabel;
 };
 
-// Chopper toggle (v0.3.1): a 20x20 square centred at (395,210) — the
+// Chopper toggle (v0.3.2): a 20x20 square centred at (395,210) — the
 // midpoint between Glide (350,250) and Chopper Ramp (440,170). The panel
 // art has a white square baked there; the code covers it with the state
 // fill: ON = red, OFF = yellow (same active/inactive rule as the pills).
@@ -247,7 +247,7 @@ public:
   }
 };
 
-// Panic button, ONE-SHOT (v0.3.1, Lexi 2026-11-06): the red circle +
+// Panic button, ONE-SHOT (v0.3.2, Lexi 2026-11-06): the red circle +
 // Lexi's hand-drawn "KILL THE REGIME" text are baked into the panel —
 // the code draws NO text here. One click kills the siren voice and
 // resets to idle (routed to the audio thread); the button immediately
@@ -417,16 +417,19 @@ private:
   std::function<int()> mGetNote;
 };
 
-// Preset blister (v0.3.1): a separate strip below the main panel,
+// Preset blister (v0.3.2): a separate strip below the main panel,
 // 560x90 (x20-580, y390-480), 16 slots, radius 15, x = 55 + c*70,
 // rows cy = 415 and 455. The code draws the page outline (white =
 // Page A factory, red = Page B user) over the panel's baked outline,
 // fills EVERY slot (selected = red, rest = yellow — never a bare white
 // outline), and the preset numbers (10pt Patrick Hand: navy on yellow,
 // white on red).
-// FIX (v0.3.1): OnMouseDown receives LOCAL coordinates, but the slot
-// centres are global — the v0.3 code compared them directly, so no slot
-// was ever hit. Here local is converted to global (add mRECT.L/T).
+// NOTE: OnMouseDown receives GLOBAL (panel) coordinates — iPlug2 passes
+// the raw mouse position straight through (IGraphics::OnMouseDown calls
+// pCapturedControl->OnMouseDown(x, y, mod) with no mRECT subtraction),
+// so x/y are compared directly against the global slot centres, exactly
+// as Draw() does. Do NOT add mRECT.L/T: that double-offset was the v0.3.1
+// bug — every click mapped far below the strip, so no slot was ever hit.
 // Tapping the blister frame (not on a slot) switches Page A <-> Page B.
 class PresetBlisterControl : public IControl
 {
@@ -474,13 +477,12 @@ public:
 
   void OnMouseDown(float x, float y, const IMouseMod& mod) override
   {
-    // FIX: x/y are LOCAL to this control; slot centres are GLOBAL.
-    const float gx = x + mRECT.L;
-    const float gy = y + mRECT.T;
+    // x/y are GLOBAL (panel) coordinates — same space as SlotCX/SlotCY
+    // and Draw(). Compare directly; do not offset by mRECT.
     for (int slot = 0; slot < 16; ++slot)
     {
       const int col = slot % 8, row = slot / 8;
-      const float dx = gx - SlotCX(col), dy = gy - SlotCY(row);
+      const float dx = x - SlotCX(col), dy = y - SlotCY(row);
       if (dx * dx + dy * dy < 17.f * 17.f)
       {
         mOnSlot(slot);
@@ -498,11 +500,15 @@ private:
   std::function<void()> mOnFrameTap;
 };
 
-// SAVE pill (v0.3.1): vertical red pill at (315,310)-(343,350). The
-// panel art already has a vertical "SAVE" baked on it, so the code
+// SAVE pill (v0.3.2): Lexi's yellow blank pill asset (final_art/
+// save_pill.png), rotated vertical, at (315,303)-(343,358) — 28x55,
+// centred at cy=330. The panel art has "SAVE" baked on it reading
+// top-to-bottom (S-A-V-E stacked, 12pt Patrick Hand, navy), so the code
 // draws nothing in the normal state. While naming (after SAVE -> tap a
 // slot), the pill shows "YES": the code covers the baked SAVE with a
-// red fill and draws YES stacked vertically (12pt Patrick Hand).
+// red fill over the FULL pill rect and draws YES stacked vertically
+// (12pt Patrick Hand). The control bounds match the pill exactly, so
+// the red YES fill leaves no yellow tips.
 // Click behaviour lives in the plugin (OnSaveClicked): arm the save,
 // confirm the name (YES), or cancel the arm.
 class SaveButtonControl : public IControl
@@ -550,19 +556,21 @@ private:
   bool mPressed = false;
 };
 
-// NAME DISPLAY (v0.3.1): the sticker at (348,310)-(480,350) is blank in
+// NAME DISPLAY (v0.3.2): the sticker at (348,310)-(480,350) is blank in
 // the panel art; this control draws the text in Patrick Hand ("07 •
-// DEEP WAIL" — slot number + name, NO page letter). It also hosts the
+// MADGAKKUM" — slot number + name, NO page letter). It also hosts the
 // preset-naming text entry: BeginNaming() opens a native text field
 // over the display; OnTextEntryCompletion forwards the typed name to
-// the plugin. Max name length 20 chars (longer names would spill past
-// the 132px sticker at 15pt).
+// the plugin. Max name length 20 chars. Display font is 14pt (v0.3.2):
+// the longest factory name ("01 • WAIL IN MI KITCHEN") measures
+// 132.6px at 15pt — just past the 132px sticker — but 123.7px at 14pt,
+// so 14pt fits with margin.
 class NameDisplayControl : public ITextControl
 {
 public:
   NameDisplayControl(const IRECT& bounds, std::function<void(const char*)> onName)
     : ITextControl(bounds, "-- • No preset",
-                   IText(15, kColYellow, kFontHand, EAlign::Center))
+                   IText(14, kColYellow, kFontHand, EAlign::Center))
     , mOnName(onName)
   {
     SetTextEntryLength(20);
@@ -573,7 +581,7 @@ public:
     if (IGraphics* pGraphics = GetUI())
     {
       pGraphics->CreateTextEntry(*this,
-                                 IText(15, kColYellow, kFontHand, EAlign::Center),
+                                 IText(14, kColYellow, kFontHand, EAlign::Center),
                                  mRECT, "", 0);
       SetDirty(true);
     }
@@ -590,7 +598,7 @@ private:
 };
 #endif // IPLUG_EDITOR
 
-// ---- Factory presets (v0.3.1) -------------------------------------------
+// ---- Factory presets (v0.3.2) -------------------------------------------
 // Translated from AudioLemon's 19 .amxd presets ("modify, bukan contek").
 // Fields: wave, pitchHz, glideMs, sineRateHz, sineAmtHz, pulseRateHz,
 // pulseAmtHz, chopperOn, chopperRamp, echoTimeMs, echoFb%, echoMix%,
@@ -627,37 +635,37 @@ struct FactoryPresetDef
 };
 static const FactoryPresetDef kFactoryPresets[16] = {
   // AL 1
-  {1, 64.7, 120, 1.47, 271, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.252, "LOW WAIL"},
+  {1, 64.7, 120, 1.47, 271, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.252, "WAIL IN MI KITCHEN"},
   // AL 2 (pitch 8.08 clamped to 20)
-  {1, 20.0, 120, 2.09, 578, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.362, "DEEP SHAKE"},
+  {1, 20.0, 120, 2.09, 578, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.362, "BAD SAMBO"},
   // AL 3 (pitch 8.08 clamped to 20)
-  {1, 20.0, 120, 0.208, 578, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.819, "DEEP DRONE"},
+  {1, 20.0, 120, 0.208, 578, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.819, "NOT THAT LSP!"},
   // AL 4 (sine rate 0.0098 clamped to 0.01)
-  {1, 24.8, 120, 0.01, 578, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.780, "SUB DRONE"},
+  {1, 24.8, 120, 0.01, 578, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.780, "LOW WAIL"},
   // AL 5
-  {1, 24.8, 120, 3.84, 271, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.780, "SUB TRILL"},
+  {1, 24.8, 120, 3.84, 271, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.780, "RAAADD"},
   // AL 7
-  {1, 195.4, 0, 1.0, 0, 5.02, 364, false, 32, 375, 45, 30, 40, 25, 50, 0.252, "TWO TONE"},
+  {1, 195.4, 0, 1.0, 0, 5.02, 364, false, 32, 375, 45, 30, 40, 25, 50, 0.252, "SHAKING LALIN"},
   // AL 11 — the classic slow deep dub wail (Lexi's screenshot)
-  {1, 24.8, 120, 0.637, 868, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.780, "DEEP WAIL"},
+  {1, 24.8, 120, 0.637, 868, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.780, "MADGAKKUM"},
   // AL 9
-  {1, 447.3, 0, 1.0, 0, 8.64, 1652, true, 32, 375, 45, 30, 40, 25, 50, 0.252, "CHOP TONE"},
+  {1, 447.3, 0, 1.0, 0, 8.64, 1652, true, 32, 375, 45, 30, 40, 25, 50, 0.252, "KING OPHAY"},
   // AL 10
-  {1, 776.5, 0, 1.0, 0, 8.64, 1018, true, 35, 375, 45, 30, 40, 25, 50, 0.252, "CHOP HIGH"},
+  {1, 776.5, 0, 1.0, 0, 8.64, 1018, true, 35, 375, 45, 30, 40, 25, 50, 0.252, "LOWCUT BOOTS"},
   // AL 8
-  {1, 477.8, 0, 0.208, 692, 10.88, 81, false, 0, 375, 45, 30, 40, 25, 50, 0.252, "MID WAIL"},
+  {1, 477.8, 0, 0.208, 692, 10.88, 81, false, 0, 375, 45, 30, 40, 25, 50, 0.252, "LAZERHALF"},
   // AL 12
-  {1, 24.8, 120, 0.0378, 1652, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.780, "BIG SWELL"},
+  {1, 24.8, 120, 0.0378, 1652, 5.0, 0, false, 32, 375, 45, 30, 40, 25, 50, 0.780, "THEM A THIEF"},
   // AL 13
-  {1, 24.8, 0, 0.0378, 1652, 5.02, 966, false, 32, 375, 45, 30, 40, 25, 50, 0.780, "SWELL STEP"},
+  {1, 24.8, 0, 0.0378, 1652, 5.02, 966, false, 32, 375, 45, 30, 40, 25, 50, 0.780, "FAUX CALL"},
   // AL 14
-  {1, 24.8, 0, 0.0378, 1652, 14.84, 966, false, 32, 375, 45, 30, 40, 25, 50, 0.677, "SWELL ROLL"},
+  {1, 24.8, 0, 0.0378, 1652, 14.84, 966, false, 32, 375, 45, 30, 40, 25, 50, 0.677, "BOUNCER"},
   // AL 15 — the laser representative (both LFO rates in range)
-  {1, 24.8, 0, 652.6, 1652, 1308.6, 966, false, 32, 375, 45, 30, 40, 25, 50, 0.677, "LASER"},
+  {1, 24.8, 0, 652.6, 1652, 1308.6, 966, false, 32, 375, 45, 30, 40, 25, 50, 0.677, "ROLLING HAZE"},
   // AL 16
-  {1, 24.8, 0, 0.0987, 7183, 2.87, 966, false, 32, 375, 45, 30, 40, 25, 50, 0.677, "MEGA SWELL"},
+  {1, 24.8, 0, 0.0987, 7183, 2.87, 966, false, 32, 375, 45, 30, 40, 25, 50, 0.677, "LKJAB"},
   // AL 18 (pitch 2233.3 clamped to 2000)
-  {1, 2000.0, 0, 101.0, 21, 3.84, 2326, true, 32, 375, 45, 30, 40, 25, 50, 0.063, "SKY CHOP"},
+  {1, 2000.0, 0, 101.0, 21, 3.84, 2326, true, 32, 375, 45, 30, 40, 25, 50, 0.063, "FLYING BOBBY"},
 };
 } // namespace
 
@@ -693,7 +701,7 @@ Dubruderschaft::Dubruderschaft(const InstanceInfo& info)
     return MakeGraphics(*this, PLUG_WIDTH, PLUG_HEIGHT, PLUG_FPS);
   };
 
-  // Layout = approved v0.3.1 design (600x500 panel). All coordinates are
+  // Layout = approved v0.3.2 design (600x500 panel). All coordinates are
   // direct panel coordinates — no scaling from the old 780 draft.
   // The panel PNG holds all static art; controls only draw what moves.
   mLayoutFunc = [&](IGraphics* pGraphics) {
@@ -791,7 +799,7 @@ Dubruderschaft::Dubruderschaft(const InstanceInfo& info)
         [this]() { OnBlisterFrameTapped(); }),
         kCtrlTagBlister);
     pGraphics->AttachControl(new SaveButtonControl(
-        IRECT(315, 310, 343, 350),
+        IRECT(315, 303, 343, 358),
         [this]() { return IsNaming(); },
         [this]() { OnSaveClicked(); }),
         kCtrlTagSaveButton);
