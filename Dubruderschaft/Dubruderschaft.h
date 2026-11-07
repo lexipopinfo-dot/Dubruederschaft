@@ -1,10 +1,16 @@
-// Dubruderschaft — iPlug2 plugin class (v0.3.1, 2026-11-06).
+// Dubruderschaft — iPlug2 plugin class (v0.3.2, 2026-11-07).
 // VST3 mono dub siren. DSP core is framework-free (DubruderschaftDSP.*);
 // this class wires iPlug2 parameters + IGraphics UI to it.
 // Panel: ONE flat PNG (600x500). Functional/sidebar name is ASCII
 // "Dubruderschaft" (Lexi's explicit choice; ü -> plain u). The header
 // artwork still reads "Dubrüderschaft" (with ü).
 //
+// v0.3.2 changes (ear-test fixes, Lexi 2026-11-07):
+//  - Panic now unlatches Hold + releases Trigger (was: voice re-attacked
+//    from the still-latched Hold). Blister clicks use global coords
+//    (was: +mRECT double-offset, no slot ever hit). SAVE uses Lexi's
+//    yellow pill asset, text top-to-bottom. NAME DISPLAY is 14pt so the
+//    longest factory name fits. Factory preset names are Lexi's new set.
 // v0.3.1 changes:
 //  - Mode pills are gone: standalone LFO knobs (Sine Rate/Amt,
 //    Pulse Rate/Amt) + Chopper toggle + Ramp knob. Panic is a one-shot
@@ -84,10 +90,22 @@ public:
   bool GetHold() const { return mHold.load(); }
   int GetMidiNote() const { return mMidiNote.load(); }
 
-  // Panic, one-shot (v0.3.1): called from the UI thread on click. The
+  // Panic, one-shot (v0.3.2): called from the UI thread on click. The
   // request is routed to the audio thread (ProcessBlock calls
   // mDSP.panic()), so no DSP state is touched from the UI thread.
-  void Panic() { mPanicRequested.store(true); }
+  // v0.3.2 FIX 1: Panic also unlatches Hold and releases Trigger HERE
+  // (UI thread, atomics only). Otherwise ProcessBlock re-triggers the
+  // voice on the very next block from the still-latched mHold and the
+  // sound keeps going. MIDI state is deliberately NOT cleared: a held
+  // MIDI note is a separate trigger source and its Note Off stops it
+  // normally.
+  void Panic()
+  {
+    mHold.store(false);
+    mTrigger.store(false);
+    mPanicRequested.store(true);
+    MarkUIDirty(); // Hold pill redraws as OFF (it reads GetHold())
+  }
 
   // --- Presets: two pages x 16 slots (8x2). In-memory only. Master is
   // NOT stored in presets, so loading a preset cannot cause a sudden
