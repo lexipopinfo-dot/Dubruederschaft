@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(Dubruderschaft VERSION 0.3.1)
+project(Dubruderschaft VERSION 0.3.2)
 
 if(NOT DEFINED IPLUG2_DIR)
   set(IPLUG2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../iPlug2" CACHE PATH "iPlug2 root directory")
@@ -9,7 +9,7 @@ include(${IPLUG2_DIR}/iPlug2.cmake)
 
 find_package(iPlug2 REQUIRED)
 
-# v0.3.1: the UI is ONE flat panel PNG ("panel.png", 600x500) + the
+# v0.3.2: the UI is ONE flat panel PNG ("panel.png", 600x500) + the
 # Patrick Hand font. They live in the repo as base64 text
 # (resources/art/panel_*.json, resources/fonts/*.ttf.b64) because the
 # GitHub connector can only push text files. Decode them at configure
