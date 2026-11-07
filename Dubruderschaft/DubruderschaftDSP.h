@@ -1,4 +1,4 @@
-// Dubruderschaft — standalone DSP core (v0.3.1, 2026-11-06)
+// Dubruderschaft — standalone DSP core (v0.3.2, 2026-11-07)
 // NOT the plugin yet. Framework-free: no iPlug2, no VST3 SDK, no UI.
 // Intended to be dropped into an iPlug2 plugin class later with minimal changes.
 //
@@ -7,6 +7,8 @@
 //           -> Chopper (amplitude gate) -> Echo (dub) -> Reverb
 //           -> Master -> Limiter -> Output
 //
+// v0.3.2 changes: panic() now also clears the latched Hold and
+//   Trigger (ear-test fix — the voice re-attacked from a latched Hold).
 // v0.3.1 changes (from the AudioLemon .amxd study, "modify, bukan contek"):
 //   - Mode (Manual / Auto Wail / Two-Tone) is GONE. In its place, two
 //     standalone LFOs, each with its own Rate + Amount knob:
@@ -99,8 +101,13 @@ class DSP {
   // reset to idle — envelope to 0, oscillator + LFO phases to 0, glide
   // back to the base pitch. It does NOT clear the echo/reverb buffers,
   // so the tails keep ringing ("biarkan saja kalau tail masih tersisa").
-  // If a trigger source is still held after the click, the voice simply
-  // re-attacks through the normal 5 ms envelope — that is correct.
+  // If a MOMENTARY Trigger is still held after the click, the voice
+  // simply re-attacks through the normal 5 ms envelope — that is
+  // correct for a momentary Trigger only. It is NOT correct for a
+  // latched Hold: Panic now unlatches Hold (plugin Panic() clears
+  // mHold, and panic() itself clears hold_ here), so a latched Hold
+  // does not re-attack. A held MIDI note is a separate trigger source
+  // and is not cleared by Panic; its Note Off stops it normally.
   // Call this on the AUDIO thread (the plugin routes the UI click there).
   void panic();
 
