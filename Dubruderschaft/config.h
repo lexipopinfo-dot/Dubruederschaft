@@ -1,7 +1,7 @@
 #define PLUG_NAME "Dubruderschaft"
 #define PLUG_MFR "Lexi"
-#define PLUG_VERSION_HEX 0x00030100
-#define PLUG_VERSION_STR "0.3.1"
+#define PLUG_VERSION_HEX 0x00030200
+#define PLUG_VERSION_STR "0.3.2"
 #define PLUG_UNIQUE_ID 'DbR1'
 #define PLUG_MFR_ID 'Lexi'
 #define PLUG_URL_STR "https://github.com/iPlug2/iPlug2/wiki"
