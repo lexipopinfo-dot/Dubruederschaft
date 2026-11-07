@@ -42,7 +42,6 @@ iplug_add_plugin(${PROJECT_NAME}
     DubruderschaftDSP.h
     resources/resource.h
   RESOURCES
-    resources/fonts/Roboto-Regular.ttf
     resources/fonts/PatrickHand-Regular.ttf
     resources/art/panel.png
   FORMATS
